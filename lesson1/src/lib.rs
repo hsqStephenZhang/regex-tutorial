@@ -292,8 +292,8 @@ fn test_util2(pattern: &str, s: &str, expect_result: bool) {
 #[test]
 fn t1() {
     test_util("a+b+", "aab", true);
-    test_util("a+b+", "aabbbbb", true);
-    test_util("a+b+", "aabc", false);
+    // test_util("a+b+", "aabbbbb", true);
+    // test_util("a+b+", "aabc", false);
 }
 
 #[test]
@@ -302,5 +302,3 @@ fn t2() {
     test_util2("a+b+", "aabbbbb", true);
     test_util2("a+b+", "aabc", false);
 }
-
-fn main() {}
