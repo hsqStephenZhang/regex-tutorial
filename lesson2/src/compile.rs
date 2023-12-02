@@ -1,7 +1,20 @@
 use anyhow::{anyhow, Result};
+use log::{debug, info};
 use std::collections::{HashMap, HashSet};
 
 use crate::syntax::{parse, Op, Parser, Regexp};
+
+use std::sync::Once;
+static INIT: Once = Once::new();
+
+#[cfg(test)]
+pub fn setup() -> () {
+    INIT.call_once(|| {
+        env_logger::builder()
+            .filter_level(log::LevelFilter::Debug)
+            .init();
+    });
+}
 
 #[derive(Clone, Debug)]
 enum OpCode {
@@ -177,7 +190,7 @@ fn execute(
         memory.insert((pc, sp));
 
         if pc >= insts.len() {
-            println!(
+            debug!(
                 "round:{}: thread:{},  pc: {}, sp:{}, pc out of range",
                 round, thread_id, pc, sp
             );
@@ -185,7 +198,7 @@ fn execute(
         }
         let inst = &insts[pc];
         // debug the execution process
-        println!(
+        debug!(
             "round:{}: thread:{},  pc: {}, sp:{}, inst:{:?}",
             round, thread_id, pc, sp, inst
         );
@@ -275,11 +288,15 @@ fn test_parse_and_compile1() {
 #[test]
 fn test_parse_and_compile2() {
     /*
-       Inst { op: Char('a') }
-       Inst { op: Split(-1, 1) }
-       Inst { op: Char('b') }
-       Inst { op: Split(-1, 1) }
-       Inst { op: Match }
+        Inst { op: Save }
+        Inst { op: Char('a') }
+        Inst { op: Split(-1, 1) }
+        Inst { op: Save }
+        Inst { op: Save }
+        Inst { op: Char('b') }
+        Inst { op: Split(-1, 1) }
+        Inst { op: Save }
+        Inst { op: Match }
     */
     let pattern = "(a+)(b+)";
     let parser = parse(pattern).unwrap();
@@ -290,7 +307,7 @@ fn test_parse_and_compile2() {
 }
 
 #[test]
-fn test_parse_and_compile() {
+fn test_parse_and_compile3() {
     /*
        Inst { op: Split(1, 6) }
        Inst { op: Char('h') }
@@ -316,6 +333,7 @@ fn test_parse_and_compile() {
 
 #[test]
 fn test_parse_and_compile_and_execute() {
+    setup();
     fn test_util(pattern: &str, s: &str, expect_result: bool) {
         // pattern and the to be matched string
         let parser = parse(pattern).unwrap();
@@ -338,20 +356,20 @@ fn test_parse_and_compile_and_execute() {
             &mut thread_id,
             &mut saved,
         );
-        println!("captured groups: {:?}", saved);
+        info!("captured groups: {:?}", saved);
         assert_eq!(r, expect_result);
     }
 
-    // test_util("a+b+", "aab", true);
-    // test_util("(a+)(b+)", "aab", true);
-    // test_util("a+b+", "aabbbbb", true);
-    // test_util("a+b+", "aabc", false);
-    // test_util("hello|world", "hello", true);
-    // test_util("hello|world", "world", true);
-    // test_util("hello|world", "hellw", false);
+    test_util("a+b+", "aab", true);
+    test_util("(a+)(b+)", "aab", true);
+    test_util("a+b+", "aabbbbb", true);
+    test_util("a+b+", "aabc", false);
+    test_util("hello|world", "hello", true);
+    test_util("hello|world", "world", true);
+    test_util("hello|world", "hellw", false);
     test_util("(hell|worl)d", "hello", false);
-    // test_util("(hell|worl)d", "helld", true);
-    // test_util("(hell|worl)*d(demo|damn)*", "hellworlhellddemodamn", true);
+    test_util("(hell|worl)d", "helld", true);
+    test_util("(hell|worl)*d(demo|damn)*", "hellworlhellddemodamn", true);
 }
 
 #[derive(Debug, Clone)]
@@ -431,6 +449,7 @@ fn execute2(insts: &[Inst], chars: &[char]) -> bool {
 
 #[test]
 fn t2() {
+    setup();
     fn test_util2(pattern: &str, s: &str, expect_result: bool) {
         // pattern and the to be matched string
         let parser = parse(pattern).unwrap();
