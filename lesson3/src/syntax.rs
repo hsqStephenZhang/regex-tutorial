@@ -35,7 +35,7 @@ pub struct Regexp {
     pub min: i64,
     pub max: i64,
     pub sub: Vec<Regexp>,
-    pub chars: Vec<char>,
+    pub char: char,
 }
 
 impl Regexp {
@@ -46,7 +46,7 @@ impl Regexp {
             min: 0,
             max: 0,
             sub: Vec::new(),
-            chars: Vec::new(),
+            char: '\0',
         }
     }
 }
@@ -69,10 +69,7 @@ impl fmt::Display for Regexp {
             }
             match r.op {
                 Op::Literal => {
-                    write!(f, "Literal: ")?;
-                    for c in r.chars.iter() {
-                        write!(f, "{}", c)?;
-                    }
+                    write!(f, "Literal: {}", r.char)?;
                     writeln!(f)?;
                 }
                 Op::Alternation => {
@@ -153,7 +150,7 @@ impl Parser {
 
     pub fn literal(&mut self, c: char) {
         let mut r = Regexp::new(Op::Literal);
-        r.chars = vec![c];
+        r.char = c;
         self.stack.push(r);
     }
 
@@ -207,6 +204,11 @@ impl Parser {
                 r.sub.push(regexp);
             }
         }
+
+        if op == Op::Alternation {
+            self.build_trie_alternation();
+        }
+
         // TODO: optimize the case that op==Op::ALternation
         r
     }
@@ -239,6 +241,12 @@ impl Parser {
 
         let current_alt = self.collapse(subs, Op::Alternation);
         self.stack.push(current_alt);
+    }
+
+    // transform the alternation into a trie by prefix
+    // ABC|ABD|ABE -> AB(C|D|E)
+    fn build_trie_alternation(&mut self) {
+
     }
 
     // alwasy keep the Op::VerticalChar at the end of the op stack

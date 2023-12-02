@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use log::{debug, info};
 use std::collections::{HashMap, HashSet};
 
-use crate::syntax::{parse, Op, Parser, Regexp, simplify};
+use crate::syntax::{parse, simplify, Op, Parser, Regexp};
 
 use std::sync::Once;
 static INIT: Once = Once::new();
@@ -83,9 +83,7 @@ fn compile_once(re: &Regexp) -> Result<Vec<Inst>> {
     match re.op {
         Op::OpEmptyMatch => {}
         Op::Literal => {
-            for &c in &re.chars {
-                insts.push(Inst::new(OpCode::Char(c)));
-            }
+            insts.push(Inst::new(OpCode::Char(re.char)));
         }
         Op::Alternation => {
             let branches = re

@@ -31,7 +31,7 @@ pub struct Regexp {
     pub min: usize,
     pub max: usize,
     pub sub: Vec<Regexp>,
-    pub chars: Vec<char>,
+    pub char: char,
 }
 
 impl Regexp {
@@ -42,7 +42,7 @@ impl Regexp {
             min: 0,
             max: 0,
             sub: Vec::new(),
-            chars: Vec::new(),
+            char: '\0',
         }
     }
 }
@@ -65,10 +65,7 @@ impl fmt::Display for Regexp {
             }
             match r.op {
                 Op::Literal => {
-                    write!(f, "Literal: ")?;
-                    for c in r.chars.iter() {
-                        write!(f, "{}", c)?;
-                    }
+                    write!(f, "Literal: {}", r.char)?;
                     writeln!(f)?;
                 }
                 Op::Alternation => {
@@ -140,7 +137,7 @@ impl Parser {
 
     pub fn literal(&mut self, c: char) {
         let mut r = Regexp::new(Op::Literal);
-        r.chars = vec![c];
+        r.char = c;
         self.stack.push(r);
     }
 

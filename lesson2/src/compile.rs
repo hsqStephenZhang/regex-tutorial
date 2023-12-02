@@ -83,9 +83,7 @@ fn compile_once(re: &Regexp) -> Result<Vec<Inst>> {
     match re.op {
         Op::OpEmptyMatch => {}
         Op::Literal => {
-            for &c in &re.chars {
-                insts.push(Inst::new(OpCode::Char(c)));
-            }
+            insts.push(Inst::new(OpCode::Char(re.char)));
         }
         Op::Alternation => {
             let branches = re
