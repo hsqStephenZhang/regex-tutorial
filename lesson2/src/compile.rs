@@ -13,6 +13,8 @@ enum OpCode {
     // the numbers of two branches
     // NOTICE: here the jump is relative
     Split(i64, i64),
+    // one save instruction is corresponding to one parenthesis, but ignore the direction
+    Save,
 }
 
 #[derive(Clone, Debug)]
@@ -111,7 +113,9 @@ fn compile_once(re: &Regexp) -> Result<Vec<Inst>> {
                 .iter()
                 .filter_map(|re| compile_once(&re).map_err(|_| anyhow!("compile error")).ok())
                 .flatten();
+            insts.push(Inst::new(OpCode::Save));
             insts.extend(all_parts);
+            insts.push(Inst::new(OpCode::Save));
         }
         _ => panic!("unreachable"),
     }
@@ -152,7 +156,9 @@ fn e_plus(re: &Regexp, insts: &mut Vec<Inst>) {
     insts.push(Inst::new(OpCode::Split(-len1, 1)));
 }
 
-// similar to depth first search
+// simply judge if the pattern matches the string
+// but it won't return any details like capture groups
+// if you wish, it's easy to add these infos to the return value
 fn execute(
     insts: &[Inst],
     chars: &[char],
@@ -161,6 +167,7 @@ fn execute(
     mut sp: usize,
     round: &mut usize,
     thread_id: &mut usize,
+    saved: &mut Vec<usize>,
 ) -> bool {
     loop {
         // avoid the endless loop
@@ -215,6 +222,7 @@ fn execute(
                     sp,
                     round,
                     thread_id,
+                    saved,
                 ) {
                     return true;
                 }
@@ -224,6 +232,23 @@ fn execute(
                     return false;
                 }
                 pc = right as _;
+            }
+            OpCode::Save => {
+                saved.push(sp);
+                let r = execute(
+                    insts,
+                    chars,
+                    memory.clone(),
+                    pc + 1,
+                    sp,
+                    round,
+                    thread_id,
+                    saved,
+                );
+                if !r {
+                    saved.pop();
+                }
+                return r;
             }
         }
         *round += 1;
@@ -240,6 +265,23 @@ fn test_parse_and_compile1() {
        Inst { op: Match }
     */
     let pattern = "a+b+";
+    let parser = parse(pattern).unwrap();
+    let insts = compile(&parser).unwrap();
+    for inst in insts {
+        println!("{:?}", inst);
+    }
+}
+
+#[test]
+fn test_parse_and_compile2() {
+    /*
+       Inst { op: Char('a') }
+       Inst { op: Split(-1, 1) }
+       Inst { op: Char('b') }
+       Inst { op: Split(-1, 1) }
+       Inst { op: Match }
+    */
+    let pattern = "(a+)(b+)";
     let parser = parse(pattern).unwrap();
     let insts = compile(&parser).unwrap();
     for inst in insts {
@@ -284,32 +326,49 @@ fn test_parse_and_compile_and_execute() {
         let memory = HashSet::new();
         let mut round = 0;
         let mut thread_id = 0;
+        let mut saved = Vec::new();
 
-        let r = execute(&insts, &chars, memory, 0, 0, &mut round, &mut thread_id);
+        let r = execute(
+            &insts,
+            &chars,
+            memory,
+            0,
+            0,
+            &mut round,
+            &mut thread_id,
+            &mut saved,
+        );
+        println!("captured groups: {:?}", saved);
         assert_eq!(r, expect_result);
     }
 
     // test_util("a+b+", "aab", true);
+    // test_util("(a+)(b+)", "aab", true);
     // test_util("a+b+", "aabbbbb", true);
     // test_util("a+b+", "aabc", false);
     // test_util("hello|world", "hello", true);
     // test_util("hello|world", "world", true);
     // test_util("hello|world", "hellw", false);
-    // test_util("(hell|worl)d", "hello", false);
+    test_util("(hell|worl)d", "hello", false);
     // test_util("(hell|worl)d", "helld", true);
-    test_util("(hell|worl)*d(demo|damn)*", "hellworlhellddemodamn", true);
+    // test_util("(hell|worl)*d(demo|damn)*", "hellworlhellddemodamn", true);
 }
 
 #[derive(Debug, Clone)]
 struct Thread {
     pc: usize,
     sp: usize,
+    saved: Vec<usize>,
 }
 
 // similar to width first search
 fn execute2(insts: &[Inst], chars: &[char]) -> bool {
     let mut runq: Vec<Thread> = Vec::new();
-    runq.push(Thread { pc: 0, sp: 0 });
+    runq.push(Thread {
+        pc: 0,
+        sp: 0,
+        saved: Vec::new(),
+    });
     while !runq.is_empty() {
         let mut thread = runq.pop().unwrap();
         loop {
@@ -349,9 +408,20 @@ fn execute2(insts: &[Inst], chars: &[char]) -> bool {
                     runq.push(Thread {
                         pc: right as _,
                         sp: thread.sp,
+                        saved: thread.saved.clone(),
                     });
                     // continue the current thread
                     thread.pc = left as _;
+                }
+                OpCode::Save => {
+                    let mut new_saved: Vec<usize> = thread.saved.clone();
+                    new_saved.push(thread.sp);
+                    runq.push(Thread {
+                        pc: thread.pc + 1,
+                        sp: thread.sp,
+                        saved: new_saved,
+                    });
+                    break;
                 }
             }
         }
@@ -373,6 +443,13 @@ fn t2() {
     }
 
     test_util2("a+b+", "aab", true);
+    test_util2("(a+)(b+)", "aab", true);
     test_util2("a+b+", "aabbbbb", true);
     test_util2("a+b+", "aabc", false);
+    test_util2("hello|world", "hello", true);
+    test_util2("hello|world", "world", true);
+    test_util2("hello|world", "hellw", false);
+    test_util2("(hell|worl)d", "hello", false);
+    test_util2("(hell|worl)d", "helld", true);
+    test_util2("(hell|worl)*d(demo|damn)*", "hellworlhellddemodamn", true);
 }
