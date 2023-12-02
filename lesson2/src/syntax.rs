@@ -176,7 +176,7 @@ impl Parser {
         }
     }
 
-    pub fn collapse(&mut self, subs: Vec<Regexp>, op: Op) -> Regexp {
+    pub fn collapse(subs: Vec<Regexp>, op: Op) -> Regexp {
         if subs.len() == 1 {
             return subs[0].clone();
         }
@@ -208,7 +208,7 @@ impl Parser {
         }
 
         // TODO: handle the case that subs is empty
-        let current_alt = self.collapse(subs, Op::Concat);
+        let current_alt = Self::collapse(subs, Op::Concat);
         self.stack.push(current_alt);
     }
 
@@ -221,7 +221,7 @@ impl Parser {
             return;
         }
 
-        let current_alt = self.collapse(subs, Op::Alternation);
+        let current_alt = Self::collapse(subs, Op::Alternation);
         self.stack.push(current_alt);
     }
 
