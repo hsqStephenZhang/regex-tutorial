@@ -93,6 +93,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lesson3"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "env_logger",
+ "lazy_static",
+ "log",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.150"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -144,10 +154,6 @@ name = "regex-syntax"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08c74e62047bb2de4ff487b251e4a92e24f48745648451635cec7d591162d9f"
-
-[[package]]
-name = "regex-tutorial"
-version = "0.1.0"
 
 [[package]]
 name = "rustix"
