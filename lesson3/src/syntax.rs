@@ -167,6 +167,16 @@ impl CharClass {
     }
 }
 
+use bitflags::bitflags;
+
+bitflags! {
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct Flags: u32 {
+        const DEFAULT = 0;
+        const NON_GREEDY = 0b00000001;
+    }
+}
+
 // a node in the syntax tree
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Node {
@@ -177,6 +187,7 @@ pub struct Node {
     pub sub: Vec<Node>,
     pub char: char,
     pub class: CharClass,
+    pub flag: Flags,
 }
 
 impl Node {
@@ -189,6 +200,7 @@ impl Node {
             sub: Vec::new(),
             char: '\0',
             class: Default::default(),
+            flag: Flags::DEFAULT,
         }
     }
 }
@@ -314,12 +326,20 @@ impl Parser {
         self.stack.push(r);
     }
 
-    pub fn repeat(&mut self, op: Op, min: i64, max: i64) {
+    pub fn repeat(&mut self, op: Op, min: i64, max: i64, left_chars: &[char]) -> usize {
+        let mut forward = 0;
         let mut r = Node::new(op);
         r.min = min;
         r.max = max;
         r.sub.push(self.stack.pop().unwrap());
+
+        // not greedy
+        if let Some(&'?') = left_chars.first() {
+            r.flag |= Flags::NON_GREEDY;
+            forward = 1
+        }
         self.stack.push(r);
+        forward
     }
 
     // return the index of the last Op that is VerticalChar/LeftP
@@ -640,7 +660,9 @@ pub fn parse(pattern: &str) -> Result<Parser, SyntaxError> {
                     '?' => Op::Question,
                     _ => panic!("unreachable"),
                 };
-                p.repeat(op, 0, 0);
+                let advance_num = p.repeat(op, 0, 0, &chars[idx + 1..]);
+                idx += advance_num + 1;
+                continue;
             }
             '.' => {
                 // any character
@@ -649,8 +671,9 @@ pub fn parse(pattern: &str) -> Result<Parser, SyntaxError> {
             '{' => {
                 // repeat starts
                 let (advance_num, min, max) = Parser::parse_repeat(&chars[idx + 1..])?;
-                p.repeat(Op::Repeat, min, max);
                 idx += 2 + advance_num;
+                let forward = p.repeat(Op::Repeat, min, max, &chars[idx..]);
+                idx += forward;
                 continue;
             }
             '\\' => {

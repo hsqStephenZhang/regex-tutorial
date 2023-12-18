@@ -1,8 +1,9 @@
 use anyhow::{anyhow, Result};
+use bitflags::Flag;
 use log::{debug, info};
 use std::collections::{HashMap, HashSet};
 
-use crate::syntax::{parse, simplify, CharClass, Node, Op, Parser};
+use crate::syntax::{parse, simplify, CharClass, Flags, Node, Op, Parser};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum OpCode {
@@ -144,14 +145,22 @@ type RepeatHandler = fn(&Node, &mut Vec<Inst>);
 
 fn e_quest(re: &Node, insts: &mut Vec<Inst>) {
     let l1 = compile_once(&re.sub[0]).unwrap();
-    insts.push(Inst::new(OpCode::Split(1, l1.len() as i64 + 1)));
+    insts.push(if re.flag.contains(Flags::NON_GREEDY) {
+        Inst::new(OpCode::Split(l1.len() as i64 + 1, 1))
+    } else {
+        Inst::new(OpCode::Split(1, l1.len() as i64 + 1))
+    });
     insts.extend(l1);
 }
 
 fn e_star(re: &Node, insts: &mut Vec<Inst>) {
     let l2_1 = compile_once(&re.sub[0]).unwrap();
     let l2_2 = Inst::new(OpCode::Jmp(-(l2_1.len() as i64 + 1)));
-    insts.push(Inst::new(OpCode::Split(1, l2_1.len() as i64 + 2)));
+    insts.push(if re.flag.contains(Flags::NON_GREEDY) {
+        Inst::new(OpCode::Split(l2_1.len() as i64 + 2, 1))
+    } else {
+        Inst::new(OpCode::Split(1, l2_1.len() as i64 + 2))
+    });
     insts.extend(l2_1);
     insts.push(l2_2);
 }
@@ -160,7 +169,11 @@ fn e_plus(re: &Node, insts: &mut Vec<Inst>) {
     let l1 = compile_once(&re.sub[0]).unwrap();
     let len1 = l1.len() as i64;
     insts.extend(l1);
-    insts.push(Inst::new(OpCode::Split(-len1, 1)));
+    insts.push(if re.flag.contains(Flags::NON_GREEDY) {
+        Inst::new(OpCode::Split(1, -len1))
+    } else {
+        Inst::new(OpCode::Split(-len1, 1))
+    });
 }
 
 // simply judge if the pattern matches the string

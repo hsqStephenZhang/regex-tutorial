@@ -97,6 +97,7 @@ name = "lesson3"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bitflags",
  "env_logger",
  "lazy_static",
  "log",
