@@ -7,14 +7,18 @@ pub enum SyntaxError {
     ErrParentheseNotMatch,
     ErrBraceNotMatch,
     ErrRepeatFormat,
+    ErrBracketNotClose,
+    ErrInvalidCharClass(char, char),
+    ErrEmptyEscapeChar,
 }
 
-// syntax tree(expr) -> instructions -> execute
+// the type of the operation of a node in the syntax tree
 #[derive(Clone, Debug, Copy, PartialEq, PartialOrd, Ord, Eq, Hash)]
 pub enum Op {
     OpEmptyMatch = 0,
     OpAnyChar,
     Literal,
+    CharClass,
     Alternation,
     Concat,
     Star,
@@ -28,17 +32,154 @@ pub enum Op {
     VerticalChar,
 }
 
-#[derive(Clone, Debug)]
-pub struct Regexp {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CharClass {
+    // (low, high)
+    pub ranges: Vec<(u32, u32)>,
+    pub is_negative: bool,
+}
+
+impl CharClass {
+    pub fn new(mut ranges: Vec<(u32, u32)>, is_negative: bool) -> Self {
+        Self::re_range(&mut ranges);
+        Self {
+            ranges,
+            is_negative,
+        }
+    }
+
+    pub fn push_range(&mut self, r: (char, char)) {
+        self.ranges.push((r.0 as u32, r.1 as u32));
+        // for convenience, we can get the right index and insert instead
+        Self::re_range(&mut self.ranges);
+    }
+
+    pub fn neg(&mut self) -> &mut Self {
+        self.is_negative = true;
+        self
+    }
+
+    pub fn with_ranges(&mut self, ranges: &[(char, char)]) -> &mut Self {
+        let mut new_ranges = ranges
+            .into_iter()
+            .map(|(l, h)| (*l as u32, *h as u32))
+            .collect::<Vec<_>>();
+        Self::re_range(&mut new_ranges);
+        self.ranges = new_ranges;
+        self
+    }
+
+    fn re_range(ranges: &mut Vec<(u32, u32)>) {
+        if ranges.len() <= 1 {
+            return;
+        }
+        ranges.sort_by(|a, b| match a.0.cmp(&b.0) {
+            std::cmp::Ordering::Equal => a.1.cmp(&b.1),
+            other => other,
+        });
+
+        let mut cur = ranges[0].clone();
+        let mut new_ranges = vec![];
+        for r in ranges.iter() {
+            if r.0 > cur.1 + 1 {
+                new_ranges.push(cur);
+                cur = r.clone();
+            } else {
+                cur.1 = cur.1.max(r.1);
+            }
+        }
+        new_ranges.push(cur);
+        std::mem::swap(ranges, &mut new_ranges);
+        // sort and merge the ranges
+    }
+
+    fn flip(&mut self) {
+        // flip the ranges with another representation
+        if self.is_negative {
+            self.is_negative = false;
+            let mut new_ranges = vec![];
+            let mut start = 0;
+
+            for (lo, hi) in self.ranges.iter() {
+                if *lo > start {
+                    new_ranges.push((start, *lo as u32 - 1));
+                }
+                start = *hi as u32 + 1;
+            }
+            if let Some(last) = self.ranges.last() {
+                if last.1 < char::MAX as _ {
+                    new_ranges.push((last.1 + 1, char::MAX as _));
+                }
+            }
+            self.ranges = new_ranges;
+        }
+    }
+
+    pub fn merge(mut left: Self, mut other: Self) -> Self {
+        left.flip();
+        other.flip();
+        left.ranges.extend(other.ranges);
+        Self::re_range(&mut left.ranges);
+        left
+    }
+}
+
+#[test]
+fn test_re_range() {
+    let mut r = CharClass::default();
+    r.with_ranges(&[('a', 'z'), ('x', 'z'), ('e', 'f'), ('a', 'b')][..]);
+    assert_eq!(r.ranges, vec![('a' as _, 'z' as _)]);
+
+    let mut not_digit = CharClass::default();
+    not_digit.with_ranges(&[('0', '9')][..]).neg();
+
+    let merged = CharClass::merge(CharClass::default(), not_digit);
+    assert_eq!(
+        merged.ranges,
+        vec![(0, '0' as u32 - 1), ('9' as u32 + 1, char::MAX as _)]
+    );
+
+    // the merge of empty char class is not allowed
+    let empty1 = CharClass::default();
+    let empty2 = CharClass::default();
+    let empty3 = CharClass::merge(empty1, empty2);
+    assert_eq!(empty3.ranges, vec![]);
+    assert_eq!(empty3.is_negative, false);
+}
+
+impl Default for CharClass {
+    fn default() -> Self {
+        Self {
+            ranges: vec![],
+            is_negative: false,
+        }
+    }
+}
+
+impl CharClass {
+    pub fn is_match(&self, c: char) -> bool {
+        let c = c as u32;
+        if self.is_negative {
+            self.ranges.iter().all(|(lo, hi)| c < *lo || c > *hi)
+        } else {
+            self.ranges.iter().any(|(lo, hi)| c >= *lo && c <= *hi)
+        }
+    }
+}
+
+// a node in the syntax tree
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Node {
     pub op: Op,
     pub cap: usize,
     pub min: i64,
     pub max: i64,
-    pub sub: Vec<Regexp>,
+    pub sub: Vec<Node>,
     pub char: char,
+    pub class: CharClass,
 }
 
-impl Regexp {
+impl Node {
     pub fn new(op: Op) -> Self {
         Self {
             op,
@@ -47,18 +188,21 @@ impl Regexp {
             max: 0,
             sub: Vec::new(),
             char: '\0',
+            class: Default::default(),
         }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Parser {
-    pub stack: Vec<Regexp>,
+    // the stack is useful during the parsing
+    // but the num of stack elements is actually 1 when finishing the process
+    pub stack: Vec<Node>,
     pub num_capture: usize,
 }
 
 // print the syntax tree with a pretty format and indentations
-impl fmt::Display for Regexp {
+impl fmt::Display for Node {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut stack = vec![(self, 0)];
         while let Some(pair) = stack.pop() {
@@ -129,6 +273,12 @@ impl fmt::Display for Regexp {
                         stack.push((r, indent + 1));
                     }
                 }
+                Op::CharClass => {
+                    writeln!(f, "CharClass, classes: {:?}", self.class)?;
+                    for r in &r.sub {
+                        stack.push((r, indent + 1));
+                    }
+                }
             }
         }
         Ok(())
@@ -143,25 +293,29 @@ impl Parser {
         }
     }
 
+    pub fn push(&mut self, r: Node) {
+        self.stack.push(r);
+    }
+
     pub fn op(&mut self, op: Op) {
-        let r = Regexp::new(op);
+        let r = Node::new(op);
         self.stack.push(r);
     }
 
     pub fn literal(&mut self, c: char) {
-        let mut r = Regexp::new(Op::Literal);
+        let mut r = Node::new(Op::Literal);
         r.char = c;
         self.stack.push(r);
     }
 
     pub fn op_with_num_cap(&mut self, op: Op, num_cap: usize) {
-        let mut r = Regexp::new(op);
+        let mut r = Node::new(op);
         r.cap = num_cap;
         self.stack.push(r);
     }
 
     pub fn repeat(&mut self, op: Op, min: i64, max: i64) {
-        let mut r = Regexp::new(op);
+        let mut r = Node::new(op);
         r.min = min;
         r.max = max;
         r.sub.push(self.stack.pop().unwrap());
@@ -189,12 +343,13 @@ impl Parser {
         }
     }
 
-    pub fn collapse(subs: Vec<Regexp>, op: Op) -> Regexp {
+    // collapse the sub nodes with the same op into one node
+    pub fn collapse(subs: Vec<Node>, op: Op) -> Node {
         if subs.len() == 1 {
             return subs[0].clone();
         }
 
-        let mut r = Regexp::new(op);
+        let mut r = Node::new(op);
         r.sub.push(subs[0].clone());
 
         for regexp in subs.into_iter().skip(1) {
@@ -206,7 +361,7 @@ impl Parser {
         }
 
         if op == Op::Alternation {
-            Self::build_trie_alternation();
+            Self::build_trie_alternation(&mut r);
         }
         r
     }
@@ -214,7 +369,7 @@ impl Parser {
     pub fn concat(&mut self) {
         // string: abc|def|efg
         // we are at:     ^
-        // and we should combine the literals of "def" together (the "abc|"" is already parsed)
+        // and we should combine the literals of "def" together (the "abc|" is already parsed)
         let sep_index = self.get_last_sep_op_index();
         let subs = self.stack.drain(sep_index..).collect::<Vec<_>>();
 
@@ -223,7 +378,6 @@ impl Parser {
             return;
         }
 
-        // TODO: handle the case that subs is empty
         let current_alt = Self::collapse(subs, Op::Concat);
         self.stack.push(current_alt);
     }
@@ -243,8 +397,8 @@ impl Parser {
 
     // transform the alternation into a trie by prefix
     // ABC|ABD|ABE -> AB(C|D|E)
-    fn build_trie_alternation() {
-        
+    fn build_trie_alternation(_r: &mut Node) {
+        // TODO: optimize the alternation
     }
 
     // alwasy keep the Op::VerticalChar at the end of the op stack
@@ -268,6 +422,8 @@ impl Parser {
         false
     }
 
+    // the end of one scope, we should concat the nodes in the scope with Op::Concat
+    // and then deal with the branches
     pub fn parse_scope_end(&mut self) {
         self.concat();
         if self.swap_vertical_char() {
@@ -291,21 +447,18 @@ impl Parser {
         } else {
             // capture
             let re1 = self.stack.pop().unwrap();
-            let mut re2: Regexp = self.stack.pop().unwrap();
+            let mut re2: Node = self.stack.pop().unwrap();
             re2.op = Op::Capture;
             re2.sub.resize(1, re1);
             self.stack.push(re2);
         }
 
         Ok(())
-
-        // let re1 = self.stack.pop().unwrap();
-        // let er2 = self.stack.pop().unwrap();
     }
 
     // parses {min} (max=min) or {min,} (max=-1) or {min,max}.
     // and returns the span of the next char after the repeat
-    pub fn parse_repeat(&self, chars: &[char]) -> Result<(usize, i64, i64), SyntaxError> {
+    pub fn parse_repeat(chars: &[char]) -> Result<(usize, i64, i64), SyntaxError> {
         let close_brace_index = chars.iter().position(|c: &char| *c == '}');
         let idx = match close_brace_index {
             Some(idx) => idx,
@@ -343,6 +496,106 @@ impl Parser {
 
         Ok((idx, min, max))
     }
+
+    /*
+    parse the character class, the syntax to be supported:
+
+    class 1. [aeiou]
+    class 2. [a-z]
+    class 3. [7#1-9,x] (combination of class 1-2)
+    class 4. [^a-z] (negation of class 3)
+    */
+    pub fn parse_char_class(chars: &[char]) -> Result<(usize, CharClass), SyntaxError> {
+        let origin_len = chars.len();
+        let (is_negative, mut chars) = if let Some('^') = chars.first() {
+            (true, &chars[1..])
+        } else {
+            (false, chars)
+        };
+
+        let mut class_all = CharClass::default();
+
+        // the chars must move forward, or it will cause endless loop
+        fn parse_class_char<'a>(chars: &'a [char]) -> Result<(&'a [char], char), SyntaxError> {
+            return match chars.first() {
+                Some(&c) => Ok((&chars[1..], c)),
+                None => Err(SyntaxError::ErrBracketNotClose),
+            };
+        }
+
+        while !chars.is_empty() && chars[0] != ']' {
+            if chars[0] == '\\' {
+                let (_, other) = Parser::parse_escape(&chars[1..])?;
+                chars = &chars[1..];
+                class_all = CharClass::merge(class_all, other);
+                continue;
+            }
+
+            let (new_chars, lo) = parse_class_char(chars)?;
+            chars = new_chars;
+
+            let mut hi = lo;
+
+            // patterns like [a-z] will match the condition below
+            // patterns like [a-] will be parsed as a|-, and will not match the condition below
+            if chars.len() >= 2 && chars[0] == '-' && chars[1] != ']' {
+                let (new_chars, new_hi) = parse_class_char(&chars[1..])?;
+
+                if new_hi < lo {
+                    return Err(SyntaxError::ErrInvalidCharClass(lo, hi));
+                }
+                chars = new_chars;
+                hi = new_hi;
+            }
+            class_all.push_range((lo, hi));
+        }
+        if chars.is_empty() {
+            return Err(SyntaxError::ErrBracketNotClose);
+        }
+        chars = &chars[1..];
+        if is_negative {
+            class_all.neg();
+        }
+
+        Ok((origin_len - chars.len(), class_all))
+    }
+
+    fn parse_escape(chars: &[char]) -> Result<(usize, CharClass), SyntaxError> {
+        if chars.is_empty() {
+            return Err(SyntaxError::ErrEmptyEscapeChar);
+        }
+
+        const WHITE_SPACE: &[(char, char)] =
+            &[(' ', ' '), ('\t', '\t'), ('\n', '\n'), ('\r', '\r')];
+        const DIGIT: &[(char, char)] = &[('0', '9')];
+        const WORD: &[(char, char)] = &[('a', 'z'), ('A', 'Z'), ('0', '9'), ('_', '_')];
+
+        let mut class = CharClass::default();
+
+        match chars[0] {
+            's' => {
+                class.with_ranges(WHITE_SPACE);
+            }
+            'S' => {
+                class.with_ranges(WHITE_SPACE).neg();
+            }
+            'd' => {
+                class.with_ranges(DIGIT);
+            }
+            'D' => {
+                class.with_ranges(DIGIT).neg();
+            }
+            'w' => {
+                class.with_ranges(WORD);
+            }
+            'W' => {
+                class.with_ranges(WORD).neg();
+            }
+            _ => class.push_range((chars[0], chars[0])),
+        }
+
+        Ok((1, class))
+    }
 }
 
 pub fn parse(pattern: &str) -> Result<Parser, SyntaxError> {
@@ -371,6 +624,14 @@ pub fn parse(pattern: &str) -> Result<Parser, SyntaxError> {
                 // right parenthese
                 p.parse_right_parenthese()?;
             }
+            '[' => {
+                let (advance_num, class) = Parser::parse_char_class(&chars[idx + 1..])?;
+                let mut node = Node::new(Op::CharClass);
+                node.class = class;
+                p.stack.push(node);
+                idx += 1 + advance_num;
+                continue;
+            }
             '+' | '?' | '*' => {
                 // repetition
                 let op = match c {
@@ -387,9 +648,18 @@ pub fn parse(pattern: &str) -> Result<Parser, SyntaxError> {
             }
             '{' => {
                 // repeat starts
-                let (advance_num, min, max) = p.parse_repeat(&chars[idx + 1..])?;
+                let (advance_num, min, max) = Parser::parse_repeat(&chars[idx + 1..])?;
                 p.repeat(Op::Repeat, min, max);
                 idx += 2 + advance_num;
+                continue;
+            }
+            '\\' => {
+                // escape
+                let (advance_num, class) = Parser::parse_escape(&chars[idx + 1..])?;
+                let mut node = Node::new(Op::CharClass);
+                node.class = class;
+                p.stack.push(node);
+                idx += 1 + advance_num;
                 continue;
             }
             // just ignore some escape characters
@@ -412,13 +682,15 @@ pub fn simplify(parser: &mut Parser) {
 }
 
 // simplify the repeat into other expressions
-pub fn simplify_inner(re: &mut Regexp) {
+pub fn simplify_inner(re: &mut Node) {
     // only handle repeat here
     if re.op != Op::Repeat {
         return;
     }
 
     let sub = re.sub[0].clone();
+
+    // half closed range
 
     // 1. x{n,}
     if re.max == -1 {
@@ -435,15 +707,17 @@ pub fn simplify_inner(re: &mut Regexp) {
         }
 
         // x{n,} -> x{n}x*
-        let mut prefix = Regexp::new(Op::Concat);
+        let mut prefix = Node::new(Op::Concat);
         prefix.sub = vec![sub.clone(); re.min as _];
-        let mut suffix = Regexp::new(Op::Star);
+        let mut suffix = Node::new(Op::Star);
         suffix.sub.push(sub);
         prefix.sub.push(suffix);
 
         std::mem::swap(re, &mut prefix);
         return;
     }
+
+    // closed range
 
     // 2. x{0}
     if re.min == 0 && re.max == 0 {
@@ -461,19 +735,19 @@ pub fn simplify_inner(re: &mut Regexp) {
 
     // 4. x{n,m} -> x{n}(x(x)? ...)   (n may equal to m)
 
-    let mut prefix = Regexp::new(Op::Concat);
+    let mut prefix = Node::new(Op::Concat);
     if re.min > 0 {
         prefix.sub = vec![sub.clone(); re.min as _];
     }
 
     if re.max > re.min {
-        let mut suffix = Regexp::new(Op::Question);
+        let mut suffix = Node::new(Op::Question);
         suffix.sub = vec![sub.clone()];
 
         for _ in re.min + 1..re.max {
-            let mut r = Regexp::new(Op::Concat);
+            let mut r = Node::new(Op::Concat);
             r.sub = vec![sub.clone(), suffix.clone()];
-            let mut new_suffix = Regexp::new(Op::Question);
+            let mut new_suffix = Node::new(Op::Question);
             new_suffix.sub.push(r);
             suffix = new_suffix;
         }
@@ -506,5 +780,22 @@ fn t2() {
         for r in parser.stack.iter() {
             println!("{}", r);
         }
+    }
+}
+
+#[test]
+fn t3() {
+    let patterns = ["[a-z]", "[^a-z]", "[-a]", "[a-]", "[aeiou]", "[a-zA-Z0-9]"];
+    for pattern in patterns.iter() {
+        let mut parser = parse(pattern).unwrap();
+        simplify(&mut parser);
+        for r in parser.stack.iter() {
+            println!("{}", r);
+        }
+    }
+
+    let wrong_patterns = ["[9-0]"];
+    for pattern in wrong_patterns.iter() {
+        assert!(parse(pattern).is_err());
     }
 }
