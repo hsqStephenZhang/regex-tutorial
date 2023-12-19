@@ -3,7 +3,7 @@ use bitflags::Flag;
 use log::{debug, info};
 use std::collections::{HashMap, HashSet};
 
-use crate::syntax::{parse, simplify, CharClass, Flags, Node, Op, Parser};
+use crate::syntax::{parse, simplify, CharClass, Flags, Node, Op, Ast};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum OpCode {
@@ -62,7 +62,7 @@ e
 
 */
 
-fn compile(parser: &Parser) -> Result<Vec<Inst>> {
+fn compile(parser: &Ast) -> Result<Vec<Inst>> {
     assert_eq!(parser.stack.len(), 1);
     let mut insts = compile_once(&parser.stack[0])?;
     insts.push(Inst::new(OpCode::Match));
@@ -619,6 +619,9 @@ mod test_execute {
 
         test_util("[a-z0-9]+@gmail\\.com", "test@gmail.com", true);
         test_util("[a-z0-9]+@gmail\\.com", "test@gmail@com", false);
+        test_util("[^\\D]+", "123456789", true);
+        test_util("[^\\D]+", "123456789a", false);
+        test_util("[^\\D]+a", "123456789a", true);
     }
 
     #[test]

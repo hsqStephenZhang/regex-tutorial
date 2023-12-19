@@ -206,7 +206,7 @@ impl Node {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Parser {
+pub struct Ast {
     // the stack is useful during the parsing
     // but the num of stack elements is actually 1 when finishing the process
     pub stack: Vec<Node>,
@@ -286,7 +286,11 @@ impl fmt::Display for Node {
                     }
                 }
                 Op::CharClass => {
-                    writeln!(f, "CharClass, classes: {:?}", self.class)?;
+                    writeln!(
+                        f,
+                        "CharClass, range:{:?}, is_neg:{}",
+                        r.class.ranges, r.class.is_negative
+                    )?;
                     for r in &r.sub {
                         stack.push((r, indent + 1));
                     }
@@ -297,7 +301,7 @@ impl fmt::Display for Node {
     }
 }
 
-impl Parser {
+impl Ast {
     pub fn new() -> Self {
         Self {
             stack: Vec::new(),
@@ -545,7 +549,7 @@ impl Parser {
 
         while !chars.is_empty() && chars[0] != ']' {
             if chars[0] == '\\' {
-                let (_, other) = Parser::parse_escape(&chars[1..])?;
+                let (_, other) = Ast::parse_escape(&chars[1..])?;
                 chars = &chars[1..];
                 class_all = CharClass::merge(class_all, other);
                 continue;
@@ -618,9 +622,9 @@ impl Parser {
     }
 }
 
-pub fn parse(pattern: &str) -> Result<Parser, SyntaxError> {
+pub fn parse(pattern: &str) -> Result<Ast, SyntaxError> {
     let chars = pattern.chars().collect::<Vec<_>>();
-    let mut p = Parser::new();
+    let mut p = Ast::new();
 
     let mut idx = 0;
 
@@ -645,7 +649,7 @@ pub fn parse(pattern: &str) -> Result<Parser, SyntaxError> {
                 p.parse_right_parenthese()?;
             }
             '[' => {
-                let (advance_num, class) = Parser::parse_char_class(&chars[idx + 1..])?;
+                let (advance_num, class) = Ast::parse_char_class(&chars[idx + 1..])?;
                 let mut node = Node::new(Op::CharClass);
                 node.class = class;
                 p.stack.push(node);
@@ -670,7 +674,7 @@ pub fn parse(pattern: &str) -> Result<Parser, SyntaxError> {
             }
             '{' => {
                 // repeat starts
-                let (advance_num, min, max) = Parser::parse_repeat(&chars[idx + 1..])?;
+                let (advance_num, min, max) = Ast::parse_repeat(&chars[idx + 1..])?;
                 idx += 2 + advance_num;
                 let forward = p.repeat(Op::Repeat, min, max, &chars[idx..]);
                 idx += forward;
@@ -678,7 +682,7 @@ pub fn parse(pattern: &str) -> Result<Parser, SyntaxError> {
             }
             '\\' => {
                 // escape
-                let (advance_num, class) = Parser::parse_escape(&chars[idx + 1..])?;
+                let (advance_num, class) = Ast::parse_escape(&chars[idx + 1..])?;
                 let mut node = Node::new(Op::CharClass);
                 node.class = class;
                 p.stack.push(node);
@@ -698,7 +702,7 @@ pub fn parse(pattern: &str) -> Result<Parser, SyntaxError> {
     Ok(p)
 }
 
-pub fn simplify(parser: &mut Parser) {
+pub fn simplify(parser: &mut Ast) {
     for r in parser.stack.iter_mut() {
         simplify_inner(r);
     }
@@ -810,15 +814,20 @@ fn t2() {
 fn t3() {
     let patterns = ["[a-z]", "[^a-z]", "[-a]", "[a-]", "[aeiou]", "[a-zA-Z0-9]"];
     for pattern in patterns.iter() {
-        let mut parser = parse(pattern).unwrap();
-        simplify(&mut parser);
-        for r in parser.stack.iter() {
-            println!("{}", r);
-        }
+        let mut ast = parse(pattern).unwrap();
+        simplify(&mut ast);
+        println!("{}", ast.stack[0]);
     }
 
     let wrong_patterns = ["[9-0]"];
     for pattern in wrong_patterns.iter() {
         assert!(parse(pattern).is_err());
+    }
+
+    let neg_neg_patterns = ["[\\D]", "[^\\D]"];
+    for pattern in neg_neg_patterns.iter() {
+        let mut ast = parse(pattern).unwrap();
+        simplify(&mut ast);
+        println!("{}", ast.stack[0]);
     }
 }
