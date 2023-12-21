@@ -924,8 +924,68 @@ fn t3() {
 
 #[test]
 fn t4() {
-    // "a|ab|abc|abcd|b|bc|bcd|bcde",
-    let patterns = ["hello(a|ab|abc)world"];
+    /*
+    before simplifying the alternation:
+
+    Literal: h
+    Literal: e
+    Literal: l
+    Literal: l
+    Literal: o
+    Capture:
+    Alternation:
+        Concat:
+        Literal: a
+        Question:
+            Concat:
+            Literal: a
+            Question:
+                Literal: a
+        Concat:
+        Literal: a
+        Literal: b
+        Concat:
+        Literal: a
+        Literal: b
+        Literal: c
+    Literal: w
+    Literal: o
+    Literal: r
+    Literal: l
+    Literal: d
+
+    after simplifying the alternation:
+
+    Literal: h
+    Literal: e
+    Literal: l
+    Literal: l
+    Literal: o
+    Capture:
+        Concat:
+        Literal: a
+        Alternation:
+            Alternation:
+            Concat:
+                Question:
+                Concat:
+                    Literal: a
+                    Question:
+                    Literal: a
+            Concat:
+            Literal: b
+            Alternation:
+                OpEmptyMatch
+                Concat:
+                Literal: c
+                OpEmptyMatch
+    Literal: w
+    Literal: o
+    Literal: r
+    Literal: l
+    Literal: d
+        */
+    let patterns = ["hello(a{1,3}|ab|abc)world"];
     for pattern in patterns.iter() {
         let mut parser = parse(pattern).unwrap();
         simplify(&mut parser);
