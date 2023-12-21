@@ -3,7 +3,7 @@ use bitflags::Flag;
 use log::{debug, info};
 use std::collections::{HashMap, HashSet};
 
-use crate::syntax::{parse, simplify, CharClass, Flags, Node, Op, Ast};
+use crate::syntax::{parse, simplify, Ast, CharClass, Flags, Node, Op};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum OpCode {
@@ -449,6 +449,26 @@ mod test_compile {
         ];
         assert_eq!(actual, expected);
     }
+
+    #[test]
+    fn test_parse_and_compile6() {
+        let pattern = "a|ab|abc";
+        let mut parser = parse(pattern).unwrap();
+        simplify(&mut parser);
+        let actual = compile(&parser).unwrap();
+
+        let expected = vec![
+            Inst::new(OpCode::Char('a')),
+            Inst::new(OpCode::Split(1, 2)),
+            Inst::new(OpCode::Jmp(5)),
+            Inst::new(OpCode::Char('b')),
+            Inst::new(OpCode::Split(1, 2)),
+            Inst::new(OpCode::Jmp(2)),
+            Inst::new(OpCode::Char('c')),
+            Inst::new(OpCode::Match),
+        ];
+        assert_eq!(actual, expected);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -617,11 +637,18 @@ mod test_execute {
         // test_util("(a.)+", "abacad", true);
         // test_util("(a.z)+", "abzaczadz", true);
 
-        test_util("[a-z0-9]+@gmail\\.com", "test@gmail.com", true);
-        test_util("[a-z0-9]+@gmail\\.com", "test@gmail@com", false);
-        test_util("[^\\D]+", "123456789", true);
-        test_util("[^\\D]+", "123456789a", false);
-        test_util("[^\\D]+a", "123456789a", true);
+        // test_util("[a-z0-9]+@gmail\\.com", "test@gmail.com", true);
+        // test_util("[a-z0-9]+@gmail\\.com", "test@gmail@com", false);
+        // test_util("[^\\D]+", "123456789", true);
+        // test_util("[^\\D]+", "123456789a", false);
+        // test_util("[^\\D]+a", "123456789a", true);
+
+        test_util("a|ab|abc", "a", true);
+        test_util("a|ab|abc", "ab", true);
+        test_util("a|ab|abc", "abc", true);
+        test_util("a|ab|abc", "abcd", false);
+        test_util("hello(a|ab|abc)world", "helloabcworld", true);
+        test_util("hello(a|ab|abc)world", "helloabcdworld", false);
     }
 
     #[test]

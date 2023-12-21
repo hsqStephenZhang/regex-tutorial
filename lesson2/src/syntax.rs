@@ -105,7 +105,7 @@ impl fmt::Display for Regexp {
                     }
                 }
                 Op::OpEmptyMatch => {
-                    writeln!(f, "OpEmptyMatch:")?;
+                    writeln!(f, "OpEmptyMatch")?;
                 }
                 Op::Sep => {
                     writeln!(f, "Sep:")?;

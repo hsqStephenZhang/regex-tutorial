@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{collections::HashMap, fmt};
 
 use anyhow::Result;
 
@@ -203,6 +203,20 @@ impl Node {
             flag: Flags::DEFAULT,
         }
     }
+
+    pub fn next_char(&self) -> Option<char> {
+        match self.op {
+            Op::Literal => Some(self.char),
+            Op::Concat => {
+                if self.sub.is_empty() {
+                    None
+                } else {
+                    self.sub[0].next_char()
+                }
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -265,7 +279,7 @@ impl fmt::Display for Node {
                     }
                 }
                 Op::OpEmptyMatch => {
-                    writeln!(f, "OpEmptyMatch:")?;
+                    writeln!(f, "OpEmptyMatch")?;
                 }
                 Op::Sep => {
                     writeln!(f, "Sep:")?;
@@ -704,14 +718,20 @@ pub fn parse(pattern: &str) -> Result<Ast, SyntaxError> {
 
 pub fn simplify(parser: &mut Ast) {
     for r in parser.stack.iter_mut() {
-        simplify_inner(r);
+        simplify_repeat(r);
+    }
+    for r in parser.stack.iter_mut() {
+        simplify_alternation(r);
     }
 }
 
 // simplify the repeat into other expressions
-pub fn simplify_inner(re: &mut Node) {
-    // only handle repeat here
+fn simplify_repeat(re: &mut Node) {
+    // not a repeat node, simplify the children instead
     if re.op != Op::Repeat {
+        for sub in re.sub.iter_mut() {
+            simplify_repeat(sub);
+        }
         return;
     }
 
@@ -788,6 +808,76 @@ pub fn simplify_inner(re: &mut Node) {
     std::mem::swap(re, &mut prefix);
 }
 
+fn simplify_alternation(re: &mut Node) {
+    if re.op != Op::Alternation {
+        for sub in re.sub.iter_mut() {
+            simplify_alternation(sub);
+        }
+        return;
+    }
+
+    let mut new_subs: Vec<Node> = vec![];
+    std::mem::swap(&mut new_subs, &mut re.sub);
+
+    let mut groups = HashMap::new();
+    for sub in new_subs.into_iter() {
+        let key = sub.next_char();
+        groups.entry(key).or_insert(vec![]).push(sub);
+    }
+
+    let mut new_node = Node::new(Op::Alternation);
+
+    for (next_char, group) in groups.into_iter() {
+        let new_sub = if let Some(c) = next_char {
+            let mut new_sub = Node::new(Op::Concat);
+            let mut prefix_char = Node::new(Op::Literal);
+            prefix_char.char = c;
+
+            new_sub.sub.push(prefix_char);
+
+            let mut nexts = Node::new(Op::Alternation);
+            for mut sub in group.into_iter() {
+                if sub.op == Op::Literal || sub.sub.len() == 1 {
+                    nexts.sub.push(Node::new(Op::OpEmptyMatch));
+                } else if sub.sub[0].op == Op::Literal {
+                    sub.sub.remove(0);
+                    nexts.sub.push(sub);
+                }
+            }
+
+            simplify_alternation(&mut nexts);
+
+            if nexts.sub.len() == 1 {
+                new_sub.sub.push(nexts.sub.pop().unwrap());
+            } else {
+                new_sub.sub.push(nexts);
+            }
+
+            new_sub
+        } else {
+            if group.len() == 1 && group[0].op == Op::OpEmptyMatch {
+                group[0].clone()
+            } else {
+                let mut n = Node::new(Op::Alternation);
+                n.sub = group;
+                n
+            }
+        };
+        new_node.sub.push(new_sub);
+    }
+
+    new_node.sub.sort_by(|a, b| a.op.cmp(&b.op));
+
+    std::mem::swap(
+        re,
+        &mut if new_node.sub.len() == 1 {
+            new_node.sub.pop().unwrap()
+        } else {
+            new_node
+        },
+    );
+}
+
 #[test]
 fn t1() {
     // let pattern = "abc|def|ghi";
@@ -800,7 +890,7 @@ fn t1() {
 
 #[test]
 fn t2() {
-    let patterns = ["a*", "a{4}", "a{4,}", "a{2,4}"];
+    let patterns = ["123a*", "hea{4}llo", "a{4,}", "1234a{2,4}"];
     for pattern in patterns.iter() {
         let mut parser = parse(pattern).unwrap();
         simplify(&mut parser);
@@ -829,5 +919,18 @@ fn t3() {
         let mut ast = parse(pattern).unwrap();
         simplify(&mut ast);
         println!("{}", ast.stack[0]);
+    }
+}
+
+#[test]
+fn t4() {
+    // "a|ab|abc|abcd|b|bc|bcd|bcde",
+    let patterns = ["hello(a|ab|abc)world"];
+    for pattern in patterns.iter() {
+        let mut parser = parse(pattern).unwrap();
+        simplify(&mut parser);
+        for r in parser.stack.iter() {
+            println!("{}", r);
+        }
     }
 }
