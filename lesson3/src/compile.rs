@@ -64,12 +64,12 @@ e
 
 pub fn compile(parser: &Ast) -> Result<Vec<Inst>> {
     assert_eq!(parser.stack.len(), 1);
-    let mut insts = compile_once(&parser.stack[0])?;
+    let mut insts = compile_inner(&parser.stack[0])?;
     insts.push(Inst::new(OpCode::Match));
     Ok(insts)
 }
 
-fn compile_once(re: &Node) -> Result<Vec<Inst>> {
+fn compile_inner(re: &Node) -> Result<Vec<Inst>> {
     let mut insts = Vec::new();
     match re.op {
         Op::OpEmptyMatch => {}
@@ -86,7 +86,7 @@ fn compile_once(re: &Node) -> Result<Vec<Inst>> {
             let branches = re
                 .sub
                 .iter()
-                .filter_map(|re| compile_once(&re).map_err(|_| anyhow!("compile error")).ok())
+                .filter_map(|re| compile_inner(&re).map_err(|_| anyhow!("compile error")).ok())
                 .collect::<Vec<_>>();
             if branches.len() < 2 {
                 panic!("alternation should have at least two branches");
@@ -110,7 +110,7 @@ fn compile_once(re: &Node) -> Result<Vec<Inst>> {
             let all_parts = re
                 .sub
                 .iter()
-                .filter_map(|re| compile_once(&re).map_err(|_| anyhow!("compile error")).ok())
+                .filter_map(|re| compile_inner(&re).map_err(|_| anyhow!("compile error")).ok())
                 .flatten();
             insts.extend(all_parts);
         }
@@ -119,7 +119,7 @@ fn compile_once(re: &Node) -> Result<Vec<Inst>> {
             let all_parts = re
                 .sub
                 .iter()
-                .filter_map(|re| compile_once(&re).map_err(|_| anyhow!("compile error")).ok())
+                .filter_map(|re| compile_inner(&re).map_err(|_| anyhow!("compile error")).ok())
                 .flatten();
             insts.push(Inst::new(OpCode::Save));
             insts.extend(all_parts);
@@ -144,7 +144,7 @@ lazy_static::lazy_static! {
 type RepeatHandler = fn(&Node, &mut Vec<Inst>);
 
 fn e_quest(re: &Node, insts: &mut Vec<Inst>) {
-    let l1 = compile_once(&re.sub[0]).unwrap();
+    let l1 = compile_inner(&re.sub[0]).unwrap();
     insts.push(if re.flag.contains(Flags::NON_GREEDY) {
         Inst::new(OpCode::Split(l1.len() as i64 + 1, 1))
     } else {
@@ -154,7 +154,7 @@ fn e_quest(re: &Node, insts: &mut Vec<Inst>) {
 }
 
 fn e_star(re: &Node, insts: &mut Vec<Inst>) {
-    let l2_1 = compile_once(&re.sub[0]).unwrap();
+    let l2_1 = compile_inner(&re.sub[0]).unwrap();
     let l2_2 = Inst::new(OpCode::Jmp(-(l2_1.len() as i64 + 1)));
     insts.push(if re.flag.contains(Flags::NON_GREEDY) {
         Inst::new(OpCode::Split(l2_1.len() as i64 + 2, 1))
@@ -166,7 +166,7 @@ fn e_star(re: &Node, insts: &mut Vec<Inst>) {
 }
 
 fn e_plus(re: &Node, insts: &mut Vec<Inst>) {
-    let l1 = compile_once(&re.sub[0]).unwrap();
+    let l1 = compile_inner(&re.sub[0]).unwrap();
     let len1 = l1.len() as i64;
     insts.extend(l1);
     insts.push(if re.flag.contains(Flags::NON_GREEDY) {
@@ -174,122 +174,6 @@ fn e_plus(re: &Node, insts: &mut Vec<Inst>) {
     } else {
         Inst::new(OpCode::Split(-len1, 1))
     });
-}
-
-
-// simply judge if the pattern matches the string
-// but it won't return any details like capture groups
-// if you wish, it's easy to add these infos to the return value
-fn dfs(
-    insts: &[Inst],
-    chars: &[char],
-    mut memory: HashSet<(usize, usize)>,
-    mut pc: usize,
-    mut sp: usize,
-    round: &mut usize,
-    thread_id: &mut usize,
-    saved: &mut Vec<usize>,
-) -> bool {
-    loop {
-        // avoid the endless loop
-        if memory.contains(&(pc, sp)) {
-            return false;
-        }
-        memory.insert((pc, sp));
-
-        if pc >= insts.len() {
-            debug!(
-                "round:{}: thread:{},  pc: {}, sp:{}, pc out of range",
-                round, thread_id, pc, sp
-            );
-            return false;
-        }
-        let inst = &insts[pc];
-        // debug the execution process
-        debug!(
-            "round:{}: thread:{},  pc: {}, sp:{}, inst:{:?}",
-            round, thread_id, pc, sp, inst
-        );
-        match &inst.op {
-            OpCode::Match => return sp == chars.len(),
-            OpCode::Char(c) => {
-                // only check the validation sp when executing OpCode::Char
-                if sp < chars.len() && *c == chars[sp] {
-                    pc = pc + 1;
-                    sp = sp + 1;
-                } else {
-                    return false;
-                }
-            }
-            OpCode::CharClass(cc) => {
-                if sp < chars.len() && cc.is_match(chars[sp]) {
-                    pc = pc + 1;
-                    sp = sp + 1;
-                } else {
-                    return false;
-                }
-            }
-            OpCode::AnyChar => {
-                if sp < chars.len() {
-                    pc = pc + 1;
-                    sp = sp + 1;
-                } else {
-                    return false;
-                }
-            }
-            OpCode::Jmp(offset) => {
-                let new_pc = pc as i64 + offset;
-                if new_pc < 0 {
-                    return false;
-                }
-                pc = new_pc as usize;
-            }
-            OpCode::Split(left, right) => {
-                // recursive match
-                *round += 1;
-                let left = pc as i64 + left;
-                if left < 0 {
-                    return false;
-                }
-                if dfs(
-                    insts,
-                    chars,
-                    memory.clone(),
-                    left as _,
-                    sp,
-                    round,
-                    thread_id,
-                    saved,
-                ) {
-                    return true;
-                }
-                *thread_id += 1;
-                let right = pc as i64 + right;
-                if right < 0 {
-                    return false;
-                }
-                pc = right as _;
-            }
-            OpCode::Save => {
-                saved.push(sp);
-                let r = dfs(
-                    insts,
-                    chars,
-                    memory.clone(),
-                    pc + 1,
-                    sp,
-                    round,
-                    thread_id,
-                    saved,
-                );
-                if !r {
-                    saved.pop();
-                }
-                return r;
-            }
-        }
-        *round += 1;
-    }
 }
 
 #[cfg(test)]
@@ -474,100 +358,10 @@ mod test_compile {
     }
 }
 
-#[derive(Debug, Clone)]
-struct Thread {
-    pc: usize,
-    sp: usize,
-    saved: Vec<usize>,
-}
-
-// similar to width first search
-fn bfs(insts: &[Inst], chars: &[char]) -> bool {
-    let mut runq: Vec<Thread> = Vec::new();
-    runq.push(Thread {
-        pc: 0,
-        sp: 0,
-        saved: Vec::new(),
-    });
-    while !runq.is_empty() {
-        let mut thread = runq.pop().unwrap();
-        loop {
-            // the thread dies
-            if thread.pc >= insts.len() {
-                break;
-            }
-
-            let inst = &insts[thread.pc];
-
-            match &inst.op {
-                OpCode::Match => return thread.sp == chars.len(),
-                OpCode::Char(c) => {
-                    // only check the validation sp when executing OpCode::Char
-                    if thread.sp < chars.len() && *c == chars[thread.sp] {
-                        thread.pc += 1;
-                        thread.sp += 1;
-                    } else {
-                        break;
-                    }
-                }
-                OpCode::CharClass(cc) => {
-                    // only check the validation sp when executing OpCode::Char
-                    if thread.sp < chars.len() && cc.is_match(chars[thread.sp]) {
-                        thread.pc += 1;
-                        thread.sp += 1;
-                    } else {
-                        break;
-                    }
-                }
-                OpCode::AnyChar => {
-                    if thread.sp < chars.len() {
-                        thread.pc += 1;
-                        thread.sp += 1;
-                    } else {
-                        break;
-                    }
-                }
-                OpCode::Jmp(offset) => {
-                    let new_pc = thread.pc as i64 + offset;
-                    if new_pc < 0 {
-                        return false;
-                    }
-                    thread.pc = new_pc as usize;
-                }
-                OpCode::Split(left, right) => {
-                    let left = thread.pc as i64 + left;
-                    let right = thread.pc as i64 + right;
-                    // actually, it should be a compile error
-                    if right < 0 || left < 0 {
-                        return false;
-                    }
-                    // recursive match
-                    runq.push(Thread {
-                        pc: right as _,
-                        sp: thread.sp,
-                        saved: thread.saved.clone(),
-                    });
-                    // continue the current thread
-                    thread.pc = left as _;
-                }
-                OpCode::Save => {
-                    let mut new_saved: Vec<usize> = thread.saved.clone();
-                    new_saved.push(thread.sp);
-                    runq.push(Thread {
-                        pc: thread.pc + 1,
-                        sp: thread.sp,
-                        saved: new_saved,
-                    });
-                    break;
-                }
-            }
-        }
-    }
-    false
-}
-
 #[cfg(test)]
 mod test_execute {
+
+    use crate::exec::{bfs, dfs};
 
     use super::*;
 
