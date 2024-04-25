@@ -98,7 +98,7 @@ impl CharClass {
     // flip the negative ranges with the positive ones
     // so it will be easier to compare with others or merge
     // e.g. [^a-z] -> ['\0'->'a'-1, 'z'+1->'\u{10ffff}']
-    fn flip(&mut self) {
+    pub fn flip(&mut self) {
         if self.is_negative {
             self.is_negative = false;
             let mut new_ranges = vec![];

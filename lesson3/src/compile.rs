@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use crate::syntax::{parse, simplify, Ast, CharClass, Flags, Node, Op};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum OpCode {
+pub enum OpCode {
     Match,
     Char(char),
     AnyChar,
@@ -22,8 +22,8 @@ enum OpCode {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Inst {
-    op: OpCode,
+pub struct Inst {
+    pub op: OpCode,
 }
 
 impl Inst {
@@ -62,7 +62,7 @@ e
 
 */
 
-fn compile(parser: &Ast) -> Result<Vec<Inst>> {
+pub fn compile(parser: &Ast) -> Result<Vec<Inst>> {
     assert_eq!(parser.stack.len(), 1);
     let mut insts = compile_once(&parser.stack[0])?;
     insts.push(Inst::new(OpCode::Match));
@@ -175,6 +175,7 @@ fn e_plus(re: &Node, insts: &mut Vec<Inst>) {
         Inst::new(OpCode::Split(-len1, 1))
     });
 }
+
 
 // simply judge if the pattern matches the string
 // but it won't return any details like capture groups
@@ -293,6 +294,8 @@ fn dfs(
 
 #[cfg(test)]
 mod test_compile {
+    use crate::onepass::compile_onepass;
+
     use super::*;
 
     #[test]
