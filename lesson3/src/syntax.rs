@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt};
+use std::{collections::HashMap, default, fmt};
 
 use anyhow::Result;
 
@@ -13,8 +13,9 @@ pub enum SyntaxError {
 }
 
 // the type of the operation of a node in the syntax tree
-#[derive(Clone, Debug, Copy, PartialEq, PartialOrd, Ord, Eq, Hash)]
+#[derive(Default, Clone, Debug, Copy, PartialEq, PartialOrd, Ord, Eq, Hash)]
 pub enum Op {
+    #[default]
     OpEmptyMatch = 0,
     OpAnyChar,
     Literal,
@@ -69,6 +70,7 @@ impl CharClass {
         self
     }
 
+    // make sure the ranges is sorted, so it's easier to merge
     fn re_range(ranges: &mut Vec<(u32, u32)>) {
         if ranges.len() <= 1 {
             return;
@@ -93,8 +95,10 @@ impl CharClass {
         // sort and merge the ranges
     }
 
+    // flip the negative ranges with the positive ones
+    // so it will be easier to compare with others or merge
+    // e.g. [^a-z] -> ['\0'->'a'-1, 'z'+1->'\u{10ffff}']
     fn flip(&mut self) {
-        // flip the ranges with another representation
         if self.is_negative {
             self.is_negative = false;
             let mut new_ranges = vec![];
@@ -170,7 +174,7 @@ impl CharClass {
 use bitflags::bitflags;
 
 bitflags! {
-    #[derive(Clone, Debug, PartialEq, Eq)]
+    #[derive(Default, Clone, Debug, PartialEq, Eq)]
     pub struct Flags: u32 {
         const DEFAULT = 0;
         const NON_GREEDY = 0b00000001;
@@ -190,18 +194,26 @@ pub struct Node {
     pub flag: Flags,
 }
 
+impl Default for Node {
+    fn default() -> Self {
+        Self {
+            op: Default::default(),
+            cap: Default::default(),
+            min: Default::default(),
+            max: Default::default(),
+            sub: Default::default(),
+            char: Default::default(),
+            class: Default::default(),
+            flag: Default::default(),
+        }
+    }
+}
+
 impl Node {
     pub fn new(op: Op) -> Self {
-        Self {
-            op,
-            cap: 0,
-            min: 0,
-            max: 0,
-            sub: Vec::new(),
-            char: '\0',
-            class: Default::default(),
-            flag: Flags::DEFAULT,
-        }
+        let mut node = Self::default();
+        node.op = op;
+        node
     }
 
     pub fn next_char(&self) -> Option<char> {
@@ -219,11 +231,12 @@ impl Node {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Default, Clone, Debug, PartialEq, Eq)]
 pub struct Ast {
     // the stack is useful during the parsing
     // but the num of stack elements is actually 1 when finishing the process
     pub stack: Vec<Node>,
+    // for statistics
     pub num_capture: usize,
 }
 
@@ -317,34 +330,32 @@ impl fmt::Display for Node {
 
 impl Ast {
     pub fn new() -> Self {
-        Self {
-            stack: Vec::new(),
-            num_capture: 0,
-        }
+        Self::default()
     }
 
-    pub fn push(&mut self, r: Node) {
+    fn push(&mut self, r: Node) {
         self.stack.push(r);
     }
 
-    pub fn op(&mut self, op: Op) {
+    fn op(&mut self, op: Op) {
         let r = Node::new(op);
         self.stack.push(r);
     }
 
-    pub fn literal(&mut self, c: char) {
+    fn literal(&mut self, c: char) {
         let mut r = Node::new(Op::Literal);
         r.char = c;
         self.stack.push(r);
     }
 
-    pub fn op_with_num_cap(&mut self, op: Op, num_cap: usize) {
+    fn op_with_num_cap(&mut self, op: Op, num_cap: usize) {
         let mut r = Node::new(op);
         r.cap = num_cap;
         self.stack.push(r);
     }
 
-    pub fn repeat(&mut self, op: Op, min: i64, max: i64, left_chars: &[char]) -> usize {
+    // generic repeat, should be simplified later
+    fn repeat(&mut self, op: Op, min: i64, max: i64, left_chars: &[char]) -> usize {
         let mut forward = 0;
         let mut r = Node::new(op);
         r.min = min;
@@ -373,7 +384,10 @@ impl Ast {
         idx
     }
 
-    pub fn parse_vertical_char(&mut self) {
+    // if the pattern is "abc|def|ghi", then the node in the current stack are ['d','e','f']
+    // combine them with Op::Concat
+    // and they can be act as a one branch with the previous Op::Alternation
+    fn parse_vertical_char(&mut self) {
         self.concat();
 
         if !self.swap_vertical_char() {
@@ -382,29 +396,35 @@ impl Ast {
     }
 
     // collapse the sub nodes with the same op into one node
-    pub fn collapse(subs: Vec<Node>, op: Op) -> Node {
+    // Alternation
+    //   Alternation
+    //     Alternation:
+    //        Literal: 'a'
+    //        Literal: 'b'
+    // it can be collapsed into:
+    //  Alternation:
+    //     Literal: 'a'
+    //     Literal: 'b'
+    fn collapse(subs: Vec<Node>, op: Op) -> Node {
         if subs.len() == 1 {
             return subs[0].clone();
         }
 
-        let mut r = Node::new(op);
-        r.sub.push(subs[0].clone());
+        let mut new_node = Node::new(op);
+        new_node.sub.push(subs[0].clone());
 
         for regexp in subs.into_iter().skip(1) {
             if regexp.op == op {
-                r.sub.extend(regexp.sub);
+                new_node.sub.extend(regexp.sub);
             } else {
-                r.sub.push(regexp);
+                new_node.sub.push(regexp);
             }
         }
-
-        if op == Op::Alternation {
-            Self::build_trie_alternation(&mut r);
-        }
-        r
+        new_node
     }
 
-    pub fn concat(&mut self) {
+    // combine the literals with Op::Concat
+    fn concat(&mut self) {
         // string: abc|def|efg
         // we are at:     ^
         // and we should combine the literals of "def" together (the "abc|" is already parsed)
@@ -420,7 +440,8 @@ impl Ast {
         self.stack.push(current_alt);
     }
 
-    pub fn alternate(&mut self) {
+    // combine the branches with Op::Alternation
+    fn alternate(&mut self) {
         let sep_index = self.get_last_sep_op_index();
         let subs = self.stack.drain(sep_index..).collect::<Vec<_>>();
 
@@ -433,23 +454,15 @@ impl Ast {
         self.stack.push(current_alt);
     }
 
-    // transform the alternation into a trie by prefix
-    // ABC|ABD|ABE -> AB(C|D|E)
-    fn build_trie_alternation(_r: &mut Node) {
-        // TODO: optimize the alternation
-    }
-
-    // alwasy keep the Op::VerticalChar at the end of the op stack
-    pub fn swap_vertical_char(&mut self) -> bool {
+    // should be called after Ast::concat
+    // goal: alwasy keep the Op::VerticalChar at the end of the op stack
+    // stack before: [Branch1, Branch2, '|', Branch3]
+    // stack after : [Branch1, Branch2, Branch3, '|']
+    fn swap_vertical_char(&mut self) -> bool {
         let n = self.stack.len();
-        // TODO: adjust the range to improve effieciency (by making sure the more complex regexp is at the end)
-
-        if n >= 3 {
-            // merge literals
-        }
 
         if n >= 2 {
-            if self.stack[self.stack.len() - 2].op == Op::VerticalChar {
+            if self.stack[n - 2].op == Op::VerticalChar {
                 let last = self.stack.pop().unwrap();
                 let second_last = self.stack.pop().unwrap();
                 self.stack.push(last);
@@ -462,7 +475,7 @@ impl Ast {
 
     // the end of one scope, we should concat the nodes in the scope with Op::Concat
     // and then deal with the branches
-    pub fn parse_scope_end(&mut self) {
+    fn parse_scope_end(&mut self) {
         self.concat();
         if self.swap_vertical_char() {
             self.stack.pop();
@@ -470,7 +483,7 @@ impl Ast {
         self.alternate();
     }
 
-    pub fn parse_right_parenthese(&mut self) -> Result<(), SyntaxError> {
+    fn parse_right_parenthese(&mut self) -> Result<(), SyntaxError> {
         self.parse_scope_end();
 
         if self.stack.len() < 2 || self.stack[self.stack.len() - 2].op != Op::LeftP {
@@ -496,7 +509,7 @@ impl Ast {
 
     // parses {min} (max=min) or {min,} (max=-1) or {min,max}.
     // and returns the span of the next char after the repeat
-    pub fn parse_repeat(chars: &[char]) -> Result<(usize, i64, i64), SyntaxError> {
+    fn parse_repeat(chars: &[char]) -> Result<(usize, i64, i64), SyntaxError> {
         let close_brace_index = chars.iter().position(|c: &char| *c == '}');
         let idx = match close_brace_index {
             Some(idx) => idx,
@@ -535,14 +548,11 @@ impl Ast {
         Ok((idx, min, max))
     }
 
-    /*
-    parse the character class, the syntax to be supported:
-
-    class 1. [aeiou]
-    class 2. [a-z]
-    class 3. [7#1-9,x] (combination of class 1-2)
-    class 4. [^a-z] (negation of class 3)
-    */
+    // parse the character class, the syntax to be supported:
+    // class 1. [aeiou]
+    // class 2. [a-z]
+    // class 3. [7#1-9,x] (combination of class 1-2)
+    // class 4. [^a-z] (negation of class 3)
     pub fn parse_char_class(chars: &[char]) -> Result<(usize, CharClass), SyntaxError> {
         let origin_len = chars.len();
         let (is_negative, mut chars) = if let Some('^') = chars.first() {
@@ -598,6 +608,9 @@ impl Ast {
         Ok((origin_len - chars.len(), class_all))
     }
 
+    // parse the character after the '\'
+    // syntax is limited, since it's basically an excercise
+    // you can change the gramma as you wish
     fn parse_escape(chars: &[char]) -> Result<(usize, CharClass), SyntaxError> {
         if chars.is_empty() {
             return Err(SyntaxError::ErrEmptyEscapeChar);
@@ -650,7 +663,7 @@ pub fn parse(pattern: &str) -> Result<Ast, SyntaxError> {
         let c = chars[idx];
         match c {
             '(' => {
-                // left parenthese
+                // left parenthese, it's a capture
                 p.num_capture += 1;
                 p.op_with_num_cap(Op::LeftP, p.num_capture);
             }
@@ -663,6 +676,7 @@ pub fn parse(pattern: &str) -> Result<Ast, SyntaxError> {
                 p.parse_right_parenthese()?;
             }
             '[' => {
+                // beginning of a character class like [a-zA-Z0-9_]
                 let (advance_num, class) = Ast::parse_char_class(&chars[idx + 1..])?;
                 let mut node = Node::new(Op::CharClass);
                 node.class = class;
@@ -703,9 +717,7 @@ pub fn parse(pattern: &str) -> Result<Ast, SyntaxError> {
                 idx += 1 + advance_num;
                 continue;
             }
-            // just ignore some escape characters
             c => {
-                // if captures
                 p.literal(c);
             }
         }
@@ -737,23 +749,22 @@ fn simplify_repeat(re: &mut Node) {
 
     let sub = re.sub[0].clone();
 
-    // half closed range
+    // 1. half closed range
 
-    // 1. x{n,}
     if re.max == -1 {
-        // x{0,} -> x*
+        // a. x{0,} -> x*
         if re.min == 0 {
             re.op = Op::Star;
             return;
         }
 
-        // x{1,} -> x+
+        // b. x{1,} -> x+
         if re.min == 1 {
             re.op = Op::Plus;
             return;
         }
 
-        // x{n,} -> x{n}x*
+        // c. x{n,} -> x{n}x*
         let mut prefix = Node::new(Op::Concat);
         prefix.sub = vec![sub.clone(); re.min as _];
         let mut suffix = Node::new(Op::Star);
@@ -764,23 +775,23 @@ fn simplify_repeat(re: &mut Node) {
         return;
     }
 
-    // closed range
+    // 2. closed range
 
-    // 2. x{0}
+    // a. x{0}
     if re.min == 0 && re.max == 0 {
         re.op = Op::OpEmptyMatch;
         re.sub.clear();
         return;
     }
 
-    // 3. x{1}
+    // b. x{1}
     if re.min == 1 && re.max == 1 {
         let mut sub = re.sub.pop().unwrap();
         std::mem::swap(re, &mut sub);
         return;
     }
 
-    // 4. x{n,m} -> x{n}(x(x)? ...)   (n may equal to m)
+    // c. x{n,m} -> x{n}(x(x(x)?)? ...)   (n may equal to m)
 
     let mut prefix = Node::new(Op::Concat);
     if re.min > 0 {
@@ -808,6 +819,7 @@ fn simplify_repeat(re: &mut Node) {
     std::mem::swap(re, &mut prefix);
 }
 
+// TODO: support of stripping the common prefix of char class
 fn simplify_alternation(re: &mut Node) {
     if re.op != Op::Alternation {
         for sub in re.sub.iter_mut() {
@@ -819,6 +831,8 @@ fn simplify_alternation(re: &mut Node) {
     let mut new_subs: Vec<Node> = vec![];
     std::mem::swap(&mut new_subs, &mut re.sub);
 
+    // e.g.  pattern = "a|ab|abc|bc|bcde"
+    // the first level characters are ['a', 'b'], so it will be group by 'a' and 'b'
     let mut groups = HashMap::new();
     for sub in new_subs.into_iter() {
         let key = sub.next_char();
@@ -827,6 +841,7 @@ fn simplify_alternation(re: &mut Node) {
 
     let mut new_node = Node::new(Op::Alternation);
 
+    // the nodes in the same group have the same prefix, we can use Op::Concat to combine them
     for (next_char, group) in groups.into_iter() {
         let new_sub = if let Some(c) = next_char {
             let mut new_sub = Node::new(Op::Concat);
@@ -838,6 +853,7 @@ fn simplify_alternation(re: &mut Node) {
             let mut nexts = Node::new(Op::Alternation);
             for mut sub in group.into_iter() {
                 if sub.op == Op::Literal || sub.sub.len() == 1 {
+                    // there is no more nodes left in this branch
                     nexts.sub.push(Node::new(Op::OpEmptyMatch));
                 } else if sub.sub[0].op == Op::Literal {
                     sub.sub.remove(0);
@@ -845,16 +861,18 @@ fn simplify_alternation(re: &mut Node) {
                 }
             }
 
+            // simplify the children
             simplify_alternation(&mut nexts);
 
+            // avoid cases like 'Alternation -> Alternation -> Literal'
             if nexts.sub.len() == 1 {
                 new_sub.sub.push(nexts.sub.pop().unwrap());
             } else {
                 new_sub.sub.push(nexts);
             }
-
             new_sub
         } else {
+            // avoid cases like 'Alternation -> Alternation -> Literal'
             if group.len() == 1 && group[0].op == Op::OpEmptyMatch {
                 group[0].clone()
             } else {
@@ -880,7 +898,6 @@ fn simplify_alternation(re: &mut Node) {
 
 #[test]
 fn t1() {
-    // let pattern = "abc|def|ghi";
     let pattern = "(abc|def)*ghi+";
     let parser = parse(pattern).unwrap();
     for r in parser.stack.iter() {
