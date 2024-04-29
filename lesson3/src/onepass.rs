@@ -454,7 +454,8 @@ mod tests {
     #[test]
     fn test_onepass_failed() {
         // if the input string is 'xx', we cannot tell which branch to go
-        // techniquely, it can be guessed, but our program avoids some complex cases
+        // techniquely, it can be guessed by human, but our program avoids some complex cases
+        // since the program cannot tell the difference between `x*y*x*`'s and `x*y*xxx`'s compiled instructions
         let pattern = "x*y*x";
         let mut parser = parse(pattern).unwrap();
         simplify(&mut parser);
