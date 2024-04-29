@@ -33,8 +33,7 @@ impl OnePassInst {
 }
 
 // merge non-overlapping nexts
-// return None if the nexts are overlapping
-
+// return None if there exists overlapping ranges
 pub fn try_merge_nexts(
     nexts1: &[(CharRange, usize)],
     nexts2: &[(CharRange, usize)],
@@ -450,5 +449,17 @@ mod tests {
             &mut saved,
         );
         assert_eq!(r, true);
+    }
+
+    #[test]
+    fn test_onepass_failed() {
+        // if the input string is 'xx', we cannot tell which branch to go
+        // techniquely, it can be guessed, but our program avoids some complex cases
+        let pattern = "x*y*x";
+        let mut parser = parse(pattern).unwrap();
+        simplify(&mut parser);
+        let actual = compile(&parser).unwrap();
+        let res = compile_onepass(actual);
+        assert!(res.is_err());
     }
 }
