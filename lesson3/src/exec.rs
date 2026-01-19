@@ -11,7 +11,7 @@ use crate::{
 // simply judge if the pattern matches the string
 // but it won't return any details like capture groups
 // if you wish, it's easy to add these infos to the return value
-pub(crate) fn dfs(
+pub fn dfs(
     insts: &[Inst],
     chars: &[char],
     mut memory: HashSet<(usize, usize)>,
@@ -131,7 +131,7 @@ struct Thread {
 }
 
 // similar to width first search
-pub(crate) fn bfs(insts: &[Inst], chars: &[char]) -> bool {
+pub fn bfs(insts: &[Inst], chars: &[char]) -> bool {
     let mut runq: Vec<Thread> = Vec::new();
     runq.push(Thread {
         pc: 0,
