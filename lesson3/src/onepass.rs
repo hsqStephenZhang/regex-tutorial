@@ -463,4 +463,27 @@ mod tests {
         let res = compile_onepass(actual);
         assert!(res.is_err());
     }
+
+    struct Foo {
+        x: i32,
+    }
+
+    impl Foo {
+        fn hello_world(&self) {
+            println!("hello world");
+            let self_ptr = self as *const Foo;
+            if self_ptr.is_null() {
+                println!("null");
+            } else {
+                println!("{}", self.x);
+            }
+        }
+    }
+
+    #[test]
+    fn test_ptr() {
+        let foo = std::ptr::null() as *const Foo;
+        let foo = unsafe { std::mem::transmute::<_, &Foo>(foo) };
+        foo.hello_world();
+    }
 }
